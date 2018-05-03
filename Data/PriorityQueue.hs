@@ -1,5 +1,5 @@
 module Data.PriorityQueue (PQ, singleton, insert, minView, minViewWithKey, minAlterWithKeyF,
-                           toOrdList, foldMapWithKey,
+                           from, toOrdList, mapMaybeWithKeyA, foldMapWithKey,
                            foldrWithKey, foldlWithKey, foldrWithKeyM, foldlWithKeyM) where
 
 import Control.Applicative
@@ -8,6 +8,7 @@ import Control.Monad.Primitive
 import Data.Bits
 import Data.Bool
 import Data.Filtrable
+import Data.Foldable
 import Data.Function (on)
 import Data.Functor.Classes
 import Data.Tuple (swap)
@@ -19,7 +20,7 @@ import Util.Vector as V
 import Util.Vector.Mutable as MV
 import Util
 
-newtype PQ v k a = PQ (v (k, a))
+newtype PQ v k a = PQ { toV :: v (k, a) }
 
 foldMapWithKey :: (Ord k, Vector v (k, a)) => Monoid b => (k -> a -> b) -> PQ v k a -> b
 foldMapWithKey f = foldrWithKey ((<>) ∘∘ f) mempty
@@ -37,8 +38,18 @@ foldrWithKeyM f z xs = foldlWithKey f' pure xs z where f' k c x z = f k x z >>= 
 foldlWithKeyM :: (Ord k, Vector v (k, a)) => Monad m => (k -> b -> a -> m b) -> b -> PQ v k a -> m b
 foldlWithKeyM f z xs = foldrWithKey f' pure xs z where f' k x c z = f k z x >>= c
 
+mapMaybeWithKeyA :: (Ord k, Vector v (k, a), Vector v (k, b), Applicative p)
+                 => (k -> a -> p (Maybe (k, b))) -> PQ v k a -> p (PQ v k b)
+mapMaybeWithKeyA f = fmap from . mapMaybeA (uncurry f) . V.toList . toV
+
 toOrdList :: (Ord k, Vector v (k, a)) => PQ v k a -> [(k, a)]
 toOrdList = foldrWithKey (curry (:)) []
+
+from :: (Ord k, Vector v (k, a), Foldable f) => f (k, a) -> PQ v k a
+from = fromV . V.fromList . toList
+
+fromV :: (Ord k, Vector v (k, a)) => v (k, a) -> PQ v k a
+fromV = PQ . V.modify (buildBy (compare `on` fst))
 
 singleton :: Vector v (k, a) => k -> a -> PQ v k a
 singleton = curry $ PQ . V.singleton
@@ -88,3 +99,6 @@ siftDownBy cmp xs = go 0
 
 minBy :: (a -> a -> Ordering) -> a -> a -> a
 minBy cmp x y | GT <- cmp x y = y | otherwise = x
+
+buildBy :: (MVector v a, PrimMonad m) => (a -> a -> Ordering) -> v (PrimState m) a -> m ()
+buildBy cmp xs = for_ (reverse [0 .. MV.length xs `shiftR` 1]) $ \ n -> siftDownBy cmp $ MV.slice 0 n xs
